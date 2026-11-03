@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getContent, getProducts, saveOrders, saveProducts } from "@/lib/store";
-import { getOrders } from "@/lib/store";
+import { addOrder, getContent, getOrders, getProducts, saveProducts } from "@/lib/store";
 import { isAdmin } from "@/lib/admin";
 import { orderNumber } from "@/lib/utils";
 import type { Customer, Order, OrderItem } from "@/lib/types";
@@ -119,8 +118,7 @@ export async function POST(request: Request) {
       return decrement ? { ...product, stock: Math.max(product.stock - decrement, 0) } : product;
     });
 
-    const orders = await getOrders();
-    await saveOrders([order, ...orders]);
+    await addOrder(order);
     await saveProducts(updatedProducts);
 
     return NextResponse.json({ order });

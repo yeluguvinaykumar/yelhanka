@@ -109,6 +109,27 @@ async function mongoReplace<T>(
 
 type StringIdDocument = Document & { _id: string };
 
+/** Insert one order without rewriting the whole collection. */
+export async function addOrder(order: Order): Promise<void> {
+  if (isMongoConfigured()) {
+    const db = await getMongoDb();
+    if (db) {
+      await db.collection<Document>("orders").insertOne({
+        ...(order as unknown as Document),
+        _id: order.id as Document["_id"],
+        idx: -Date.now(),
+      });
+      return;
+    }
+  }
+
+  const orders = await readJson<Order[]>("orders.json", []);
+  await writeJson("orders.json", [
+    order,
+    ...orders.filter((item) => item.id !== order.id),
+  ]);
+}
+
 export async function getOrder(id: string): Promise<Order | undefined> {
   if (isMongoConfigured()) {
     const db = await getMongoDb();

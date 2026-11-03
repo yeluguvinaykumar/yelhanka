@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getOrders, saveOrders } from "@/lib/store";
+import { getOrder, patchOrder } from "@/lib/store";
 import { isAdmin } from "@/lib/admin";
 import type { OrderStatus } from "@/lib/types";
 
@@ -22,14 +22,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (!body.status || !STATUSES.includes(body.status)) {
       return NextResponse.json({ error: "Invalid order status." }, { status: 400 });
     }
-    const orders = await getOrders();
-    const index = orders.findIndex((order) => order.id === id);
-    if (index < 0) {
+    const order = await getOrder(id);
+    if (!order) {
       return NextResponse.json({ error: "Order not found." }, { status: 404 });
     }
-    orders[index] = { ...orders[index], status: body.status };
-    await saveOrders(orders);
-    return NextResponse.json({ order: orders[index] });
+    const updated = await patchOrder(id, { status: body.status });
+    return NextResponse.json({ order: updated ?? { ...order, status: body.status } });
   } catch {
     return NextResponse.json({ error: "Could not update order." }, { status: 400 });
   }

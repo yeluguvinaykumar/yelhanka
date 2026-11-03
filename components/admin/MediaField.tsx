@@ -110,7 +110,7 @@ export function MediaField({ value, onChange, folder, label = "Image" }: Props) 
       </div>
 
       <p className="mt-1.5 text-[8.5px] leading-relaxed text-charcoal/40">
-        JPG, PNG, WebP or AVIF under 5&nbsp;MB. Cloudinary signs every upload; without
+        JPG, PNG, WebP or AVIF under 4&nbsp;MB. Cloudinary signs every upload; without
         Cloudinary keys the image is saved to <code>public/uploads</code> for local development.
       </p>
       {error && (

@@ -4,7 +4,9 @@ import path from "path";
 import { isAdmin } from "@/lib/admin";
 import { isAllowedImageType, isCloudinaryConfigured, uploadToCloudinary } from "@/lib/cloudinary";
 
-const MAX_SIZE = 5 * 1024 * 1024;
+// Vercel serverless functions cap request bodies at 4.5 MB, so keep files
+// comfortably below that limit before the platform rejects the request.
+const MAX_SIZE = 4 * 1024 * 1024;
 
 export async function POST(request: Request) {
   if (!(await isAdmin())) {
@@ -23,7 +25,7 @@ export async function POST(request: Request) {
       );
     }
     if (file.size > MAX_SIZE) {
-      return NextResponse.json({ error: "Images must be under 5 MB." }, { status: 400 });
+      return NextResponse.json({ error: "Images must be under 4 MB." }, { status: 400 });
     }
 
     // Optional sub-folder lets the studio keep products, content and gifts tidy.

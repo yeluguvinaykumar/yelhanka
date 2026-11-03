@@ -168,7 +168,8 @@ The app creates collections on first write: `products`, `orders`, `enquiries`, `
    `tasty-treasures/products/`.
 
 Uploads are signed on the server (SHA-1 signature + timestamp + folder), so the API secret never
-reaches the browser. Accepted types: JPG, PNG, WebP, AVIF up to 5 MB.
+reaches the browser. Accepted types: JPG, PNG, WebP, AVIF up to 4 MB (Vercel's
+serverless request-body limit is 4.5 MB).
 
 ### 5. Delhivery
 
