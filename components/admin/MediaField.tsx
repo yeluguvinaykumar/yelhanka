@@ -2,23 +2,36 @@
 
 import { useState } from "react";
 import { Image as ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 type Props = {
   value: string;
   onChange: (value: string) => void;
   folder?: string;
   label?: string;
+  /** True when the studio's Cloudinary keys are configured. */
+  cloudinaryReady?: boolean;
 };
 
 /**
- * Image control used across the studio. Uploads go through the signed
- * Cloudinary route when it is configured and fall back to /public/uploads
- * locally. Pasting an external URL is always allowed.
+ * Image control used across the studio. The studio chooses the destination:
+ * Cloudinary (survives Vercel deployments) or the local `public/uploads`
+ * folder (development / self-hosted). Pasting an external URL is always
+ * allowed.
  */
-export function MediaField({ value, onChange, folder, label = "Image" }: Props) {
+export function MediaField({
+  value,
+  onChange,
+  folder,
+  label = "Image",
+  cloudinaryReady = false,
+}: Props) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [provider, setProvider] = useState<"cloudinary" | "local" | null>(null);
+  const [destination, setDestination] = useState<"cloudinary" | "local">(
+    cloudinaryReady ? "cloudinary" : "local",
+  );
 
   const upload = async (file: File) => {
     setUploading(true);
@@ -27,6 +40,7 @@ export function MediaField({ value, onChange, folder, label = "Image" }: Props) 
       const body = new FormData();
       body.append("file", file);
       if (folder) body.append("folder", folder);
+      body.append("provider", cloudinaryReady ? destination : "local");
       const response = await fetch("/api/admin/upload", { method: "POST", body });
       const data = (await response.json()) as {
         url?: string;
@@ -66,6 +80,42 @@ export function MediaField({ value, onChange, folder, label = "Image" }: Props) 
 
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
+            {cloudinaryReady && (
+              <div
+                role="group"
+                aria-label="Upload destination"
+                className="inline-flex overflow-hidden rounded-md border border-forest/15"
+              >
+                <button
+                  type="button"
+                  onClick={() => setDestination("cloudinary")}
+                  aria-pressed={destination === "cloudinary"}
+                  title="Upload to Cloudinary — survives Vercel deployments"
+                  className={cn(
+                    "px-2.5 py-2 text-[7.5px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                    destination === "cloudinary"
+                      ? "bg-forest text-ivory"
+                      : "bg-ivory text-forest/55 hover:text-forest",
+                  )}
+                >
+                  Cloud
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDestination("local")}
+                  aria-pressed={destination === "local"}
+                  title="Save to public/uploads on this machine"
+                  className={cn(
+                    "border-l border-forest/15 px-2.5 py-2 text-[7.5px] font-semibold uppercase tracking-[0.12em] transition-colors",
+                    destination === "local"
+                      ? "bg-forest text-ivory"
+                      : "bg-ivory text-forest/55 hover:text-forest",
+                  )}
+                >
+                  Local
+                </button>
+              </div>
+            )}
             <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-forest/15 bg-ivory px-2.5 py-2 text-[8px] font-semibold uppercase tracking-[0.12em] text-forest transition-colors hover:border-gold">
               {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
               {uploading ? "Uploading" : value ? "Replace" : "Upload"}
@@ -110,8 +160,10 @@ export function MediaField({ value, onChange, folder, label = "Image" }: Props) 
       </div>
 
       <p className="mt-1.5 text-[8.5px] leading-relaxed text-charcoal/40">
-        JPG, PNG, WebP or AVIF under 4&nbsp;MB. Cloudinary signs every upload; without
-        Cloudinary keys the image is saved to <code>public/uploads</code> for local development.
+        JPG, PNG, WebP or AVIF under 4&nbsp;MB. <strong>Cloud</strong> stores the image on
+        Cloudinary (recommended on Vercel — it survives deployments); <strong>Local</strong>{" "}
+        saves it to <code>public/uploads</code> on this machine. An external URL can always be
+        pasted directly.
       </p>
       {error && (
         <p role="alert" className="mt-1.5 text-[9px] leading-relaxed text-burgundy">

@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Expand, X, ChevronLeft, ChevronRight, ZoomIn } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { ProductArt } from "@/components/commerce/ProductArt";
+import { Tilt } from "@/components/ui/Tilt";
 import { cn } from "@/lib/utils";
 
 const views = [
@@ -52,24 +53,26 @@ export function ProductGallery({ product }: { product: Product }) {
         }}
       >
         <div className="relative aspect-[4/4.4] overflow-hidden sm:aspect-[4/4.2]">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={active.id}
-              initial={{ opacity: 0, scale: 1.02 }}
-              animate={{ opacity: 1, scale: zoom ? 1.18 : 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-0"
-              style={{ transformOrigin: origin }}
-            >
-              <ProductArt
-                product={product}
-                view={active.id}
-                className="h-full w-full"
-                priority
-              />
-            </motion.div>
-          </AnimatePresence>
+          <Tilt className="absolute inset-0" max={6}>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={active.id}
+                initial={{ opacity: 0, scale: 1.02 }}
+                animate={{ opacity: 1, scale: zoom ? 1.18 : 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                className="absolute inset-0"
+                style={{ transformOrigin: origin }}
+              >
+                <ProductArt
+                  product={product}
+                  view={active.id}
+                  className="h-full w-full"
+                  priority
+                />
+              </motion.div>
+            </AnimatePresence>
+          </Tilt>
         </div>
 
         {product.badge && (

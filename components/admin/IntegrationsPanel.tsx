@@ -81,9 +81,13 @@ export function IntegrationsPanel({ status }: { status: IntegrationStatus }) {
       name: "MongoDB Atlas",
       description:
         "Orders, products, enquiries, subscribers and content are stored in MongoDB so data survives Vercel deployments.",
-      connected: status.mongodb,
+      connected: status.mongodb && status.mongodbReachable,
       icon: Database,
-      detail: status.mongodb ? "Database mode" : "Temporary JSON files",
+      detail: status.mongodb
+        ? status.mongodbReachable
+          ? "Database mode"
+          : "Configured, unreachable"
+        : "Temporary JSON files",
       href: "https://cloud.mongodb.com",
     },
     {

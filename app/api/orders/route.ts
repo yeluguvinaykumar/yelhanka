@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { addOrder, getContent, getOrders, getProducts, saveProducts } from "@/lib/store";
+import { addOrder, getContent, getOrders, getProducts, getSettings, saveProducts } from "@/lib/store";
 import { isAdmin } from "@/lib/admin";
+import { createRazorpayOrder, getRazorpayCredentials, isRazorpayConfigured, RazorpayError } from "@/lib/razorpay";
 import { orderNumber } from "@/lib/utils";
 import type { Customer, Order, OrderItem } from "@/lib/types";
 
@@ -31,8 +32,32 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       customer?: Partial<Customer>;
       items?: { productId?: string; packLabel?: string; qty?: number }[];
-      payment?: "cod" | "whatsapp";
+      payment?: "cod" | "whatsapp" | "razorpay";
     };
+
+    const requestedPayment =
+      body.payment === "razorpay" || body.payment === "whatsapp" ? body.payment : "cod";
+
+    // Only the methods switched on in Admin → Integrations are accepted.
+    const settings = await getSettings();
+    if (requestedPayment === "razorpay") {
+      if (!settings.payments.razorpayEnabled || !(await isRazorpayConfigured())) {
+        return NextResponse.json(
+          { error: "Online payment is not enabled right now. Please choose another option." },
+          { status: 400 },
+        );
+      }
+    } else if (requestedPayment === "cod" && !settings.payments.codEnabled) {
+      return NextResponse.json(
+        { error: "Cash on delivery is not available right now. Please choose another option." },
+        { status: 400 },
+      );
+    } else if (requestedPayment === "whatsapp" && !settings.payments.whatsappEnabled) {
+      return NextResponse.json(
+        { error: "WhatsApp ordering is not available right now. Please choose another option." },
+        { status: 400 },
+      );
+    }
 
     if (!body.customer || !validCustomer(body.customer)) {
       return NextResponse.json(
@@ -109,9 +134,46 @@ export async function POST(request: Request) {
       subtotal,
       shipping,
       total: subtotal + shipping,
-      payment: body.payment === "whatsapp" ? "whatsapp" : "cod",
+      payment: requestedPayment,
       status: "new",
     };
+
+    // Online payments: create the gateway order first — nothing is saved if
+    // Razorpay rejects it — then persist the order as "pending".
+    let checkout:
+      | { keyId: string; orderId: string; amount: number; currency: string }
+      | undefined;
+    if (requestedPayment === "razorpay") {
+      try {
+        const { keyId } = await getRazorpayCredentials();
+        const gatewayOrder = await createRazorpayOrder({
+          amount: order.total,
+          receipt: order.id,
+          notes: { order: order.id, customer: order.customer.phone },
+        });
+        checkout = {
+          keyId,
+          orderId: gatewayOrder.id,
+          amount: gatewayOrder.amount,
+          currency: gatewayOrder.currency,
+        };
+        order.paymentStatus = "pending";
+        order.razorpay = {
+          orderId: gatewayOrder.id,
+          keyId,
+          amount: gatewayOrder.amount,
+          createdAt: new Date().toISOString(),
+        };
+      } catch (error) {
+        if (error instanceof RazorpayError) {
+          return NextResponse.json({ error: error.message }, { status: error.status });
+        }
+        return NextResponse.json(
+          { error: "Online payment could not start just now. Please try again." },
+          { status: 502 },
+        );
+      }
+    }
 
     const updatedProducts = products.map((product) => {
       const decrement = stockUpdates.get(product.id);
@@ -121,8 +183,11 @@ export async function POST(request: Request) {
     await addOrder(order);
     await saveProducts(updatedProducts);
 
-    return NextResponse.json({ order });
-  } catch {
+    return NextResponse.json(checkout ? { order, razorpay: checkout } : { order });
+  } catch (error) {
+    if (error instanceof RazorpayError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     return NextResponse.json(
       { error: "We couldn't place the order just now. Please try WhatsApp." },
       { status: 500 },

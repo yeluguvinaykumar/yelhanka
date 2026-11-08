@@ -35,9 +35,11 @@ function cloneContent(content: SiteContent): SiteContent {
 export function ContentPanel({
   content,
   onSaved,
+  cloudinaryReady,
 }: {
   content: SiteContent;
   onSaved: (content: SiteContent) => void;
+  cloudinaryReady: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("studio");
   const [draft, setDraft] = useState<SiteContent>(() => cloneContent(content));
@@ -294,6 +296,7 @@ export function ContentPanel({
                   onChange={(value) => updateHero("image", value)}
                   folder="content"
                   label="Hero image"
+                  cloudinaryReady={cloudinaryReady}
                 />
               </Field>
               <Field label="Title · first line">

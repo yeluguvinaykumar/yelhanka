@@ -342,10 +342,16 @@ function Overview({
           {[
             {
               label: "Database",
-              name: integrations.mongodb ? "MongoDB" : "Local JSON files",
-              connected: integrations.mongodb,
+              name: integrations.mongodb
+                ? integrations.mongodbReachable
+                  ? "MongoDB"
+                  : "MongoDB unreachable"
+                : "Local JSON files",
+              connected: integrations.mongodb && integrations.mongodbReachable,
               detail: integrations.mongodb
-                ? "MONGODB_URI is set — data persists."
+                ? integrations.mongodbReachable
+                  ? "MONGODB_URI is set — data persists."
+                  : "MONGODB_URI is set, but the connection failed. Check the Atlas IP access list."
                 : "Set MONGODB_URI before deploying to Vercel.",
             },
             {
@@ -1433,7 +1439,13 @@ export function AdminDashboard({
               onTab={setTab}
             />
           )}
-          {tab === "products" && <ProductsPanel products={products} onChange={setProducts} />}
+          {tab === "products" && (
+            <ProductsPanel
+              products={products}
+              onChange={setProducts}
+              cloudinaryReady={integrations.cloudinary}
+            />
+          )}
           {tab === "orders" && (
             <OrdersPanel
               orders={orders}
@@ -1448,7 +1460,13 @@ export function AdminDashboard({
           {tab === "subscribers" && (
             <SubscribersPanel subscribers={subscribers} onChange={setSubscribers} />
           )}
-          {tab === "content" && <ContentPanel content={content} onSaved={setContent} />}
+          {tab === "content" && (
+            <ContentPanel
+              content={content}
+              onSaved={setContent}
+              cloudinaryReady={integrations.cloudinary}
+            />
+          )}
           {tab === "integrations" && <IntegrationsPanel status={integrations} />}
         </main>
       </div>

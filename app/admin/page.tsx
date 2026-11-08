@@ -29,6 +29,7 @@ export default async function AdminPage() {
     getSubscribers(),
     getContent(),
   ]);
+  const integrations = await getIntegrationStatus();
 
   return (
     <AdminDashboard
@@ -37,7 +38,7 @@ export default async function AdminPage() {
       enquiries={enquiries}
       subscribers={subscribers}
       content={content}
-      integrations={getIntegrationStatus()}
+      integrations={integrations}
     />
   );
 }

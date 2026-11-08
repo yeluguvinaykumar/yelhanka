@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft,
   ArrowRight,
   Banknote,
   Check,
+  CreditCard,
   Leaf,
   Loader2,
   Mail,
@@ -76,7 +77,44 @@ const initialForm = {
 };
 
 type FormState = typeof initialForm;
-type Payment = "whatsapp" | "cod";
+type Payment = "whatsapp" | "cod" | "razorpay";
+
+/** Which methods the studio has switched on (Admin → Integrations). */
+export type PaymentOptions = {
+  razorpayEnabled: boolean;
+  codEnabled: boolean;
+  whatsappEnabled: boolean;
+};
+
+type PendingPayment = {
+  keyId: string;
+  orderId: string;
+  amount: number;
+  order: Order;
+};
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: Record<string, unknown>) => {
+      open: () => void;
+      on?: (event: string, handler: (response: unknown) => void) => void;
+    };
+  }
+}
+
+/** checkout.razorpay.com is loaded on demand — only when someone pays. */
+function loadRazorpayScript(): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(false);
+  if (window.Razorpay) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
 
 function validate(form: FormState, accepted: boolean) {
   if (form.name.trim().length < 2) return "Please enter your full name.";
@@ -114,7 +152,17 @@ function buildWhatsAppMessage(order: Order, siteName: string) {
     `Shipping: ${order.shipping === 0 ? "Free" : formatINR(order.shipping)}`,
     `Total: ${formatINR(order.total)}`,
     "",
-    `Payment preference: ${order.payment === "cod" ? "Cash on delivery (subject to confirmation)" : "Confirm and pay via WhatsApp"}`,
+    `Payment: ${
+      order.payment === "razorpay"
+        ? order.paymentStatus === "paid"
+          ? `Paid online via Razorpay${
+              order.razorpay?.paymentId ? ` (payment ${order.razorpay.paymentId})` : ""
+            }`
+          : "Online payment pending — I will complete it now, or please share a UPI link"
+        : order.payment === "cod"
+          ? "Cash on delivery (subject to confirmation)"
+          : "Confirm and pay via WhatsApp"
+    }`,
     "",
     "Please confirm availability and the next steps. Thank you!",
   ]
@@ -122,15 +170,21 @@ function buildWhatsAppMessage(order: Order, siteName: string) {
     .join("\n");
 }
 
-export function CheckoutClient() {
+export function CheckoutClient({ payments }: { payments: PaymentOptions }) {
   const { items, count, subtotal, hydrated, clearCart } = useCart();
   const site = useSite();
   const [form, setForm] = useState<FormState>(initialForm);
-  const [payment, setPayment] = useState<Payment>("whatsapp");
+  const [payment, setPayment] = useState<Payment>(() =>
+    payments.razorpayEnabled ? "razorpay" : payments.whatsappEnabled ? "whatsapp" : "cod",
+  );
   const [accepted, setAccepted] = useState(false);
   const [status, setStatus] = useState<"idle" | "sending" | "error">("idle");
   const [error, setError] = useState("");
   const [order, setOrder] = useState<Order | null>(null);
+  const [pendingPayment, setPendingPayment] = useState<PendingPayment | null>(null);
+  const [paymentNotice, setPaymentNotice] = useState("");
+  const [paying, setPaying] = useState(false);
+  const paidRef = useRef(false);
 
   const shipping = subtotal === 0 || subtotal >= site.freeShippingThreshold ? 0 : site.shippingFee;
   const total = subtotal + shipping;
@@ -145,6 +199,102 @@ export function CheckoutClient() {
 
   const setField = (field: keyof FormState, value: string) =>
     setForm((current) => ({ ...current, [field]: value }));
+
+  /** Open the Razorpay modal for a saved (pending) order. */
+  const openRazorpay = async (pending: PendingPayment) => {
+    paidRef.current = false;
+    setPaymentNotice("");
+    setPaying(true);
+
+    const ready = await loadRazorpayScript();
+    if (!ready || !window.Razorpay) {
+      setPaying(false);
+      setPaymentNotice(
+        "The payment window could not load. Check your connection and try again, or finish on WhatsApp.",
+      );
+      return;
+    }
+
+    const customer = pending.order.customer;
+    const gateway = new window.Razorpay({
+      key: pending.keyId,
+      order_id: pending.orderId,
+      amount: pending.amount,
+      currency: "INR",
+      name: site.name,
+      description: `Order ${pending.order.id}`,
+      prefill: {
+        name: customer.name,
+        contact: customer.phone,
+        email: customer.email ?? "",
+      },
+      theme: { color: "#103F25" },
+      handler: async (response: {
+        razorpay_order_id: string;
+        razorpay_payment_id: string;
+        razorpay_signature: string;
+      }) => {
+        try {
+          // Never trust the browser: the server re-derives the HMAC before
+          // marking anything paid.
+          const verify = await fetch(`/api/orders/${pending.order.id}/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(response),
+          });
+          const data = (await verify.json()) as { order?: Order; error?: string };
+          if (!verify.ok || !data.order) {
+            throw new Error(data.error || "The payment could not be verified.");
+          }
+          paidRef.current = true;
+          setOrder(data.order);
+          setPendingPayment(null);
+          setPaymentNotice("");
+          clearCart();
+          setStatus("idle");
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch (caught) {
+          setPaymentNotice(
+            caught instanceof Error ? caught.message : "The payment could not be verified.",
+          );
+        } finally {
+          setPaying(false);
+        }
+      },
+      modal: {
+        ondismiss: () => {
+          setPaying(false);
+          if (!paidRef.current) {
+            setPaymentNotice(
+              "Payment window closed — your order is saved. Complete the payment whenever you are ready.",
+            );
+          }
+        },
+      },
+    });
+
+    gateway.on?.("payment.failed", (response: unknown) => {
+      const detail = (response as { error?: { description?: string } })?.error?.description;
+      setPaymentNotice(
+        detail
+          ? `Payment failed: ${detail}. You can try again.`
+          : "Payment failed — you can try again.",
+      );
+    });
+
+    gateway.open();
+  };
+
+  /** Abandon the online checkout: hand the saved order to WhatsApp instead. */
+  const finishOnWhatsApp = () => {
+    if (!pendingPayment) return;
+    setOrder(pendingPayment.order);
+    setPendingPayment(null);
+    setPaymentNotice("");
+    clearCart();
+    setStatus("idle");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -182,9 +332,28 @@ export function CheckoutClient() {
         }),
       });
 
-      const data = (await response.json()) as { order?: Order; error?: string };
+      const data = (await response.json()) as {
+        order?: Order;
+        razorpay?: { keyId: string; orderId: string; amount: number };
+        error?: string;
+      };
       if (!response.ok || !data.order) {
         throw new Error(data.error || "We couldn't place your order just now.");
+      }
+
+      if (payment === "razorpay" && data.razorpay) {
+        // The order is saved as "pending" — open the payment window now and
+        // keep the basket until the payment verifies.
+        const pending: PendingPayment = {
+          keyId: data.razorpay.keyId,
+          orderId: data.razorpay.orderId,
+          amount: data.razorpay.amount,
+          order: data.order,
+        };
+        setPendingPayment(pending);
+        setStatus("idle");
+        await openRazorpay(pending);
+        return;
       }
 
       setOrder(data.order);
@@ -228,14 +397,34 @@ export function CheckoutClient() {
               <Check className="h-8 w-8 text-gold" strokeWidth={1.8} />
             </span>
             <p className="relative mt-5 text-[8px] uppercase tracking-[0.28em] text-gold">
-              Order request received
+              {order.payment === "razorpay"
+                ? order.paymentStatus === "paid"
+                  ? "Payment received"
+                  : "Order saved"
+                : "Order request received"}
             </p>
             <h2 className="relative mt-2 font-serif text-[clamp(2rem,4.4vw,3rem)] leading-tight">
               Thank you, {order.customer.name.split(" ")[0]}.
             </h2>
             <p className="relative mx-auto mt-3 max-w-lg text-[12px] leading-[1.85] text-ivory/65">
-              Your selection is with the studio. No payment has been taken. We will confirm
-              availability, delivery and payment with you personally.
+              {order.payment === "razorpay" ? (
+                order.paymentStatus === "paid" ? (
+                  <>
+                    Your payment of {formatINR(order.total)} is confirmed. We will pack and
+                    dispatch shortly and keep you posted on WhatsApp.
+                  </>
+                ) : (
+                  <>
+                    Your order is reserved. Complete the payment below to confirm it right away,
+                    or finish on WhatsApp.
+                  </>
+                )
+              ) : (
+                <>
+                  Your selection is with the studio. No payment has been taken. We will confirm
+                  availability, delivery and payment with you personally.
+                </>
+              )}
             </p>
             <p className="relative mt-5 inline-flex items-center gap-2 rounded-full border border-ivory/20 bg-ivory/[0.06] px-5 py-2.5 text-[9px] uppercase tracking-[0.18em] text-ivory/80">
               Reference · <strong className="font-semibold text-gold">{order.id}</strong>
@@ -298,21 +487,58 @@ export function CheckoutClient() {
               </div>
 
               <div className="rounded-xl border border-gold/30 bg-ivory p-4">
-                <p className="text-[8px] uppercase tracking-[0.2em] text-gold">Payment preference</p>
+                <p className="text-[8px] uppercase tracking-[0.2em] text-gold">Payment</p>
                 <p className="mt-1.5 flex items-center gap-2 text-[12px] text-forest">
-                  {order.payment === "cod" ? (
+                  {order.payment === "razorpay" ? (
+                    <CreditCard className="h-4 w-4 text-gold" />
+                  ) : order.payment === "cod" ? (
                     <Banknote className="h-4 w-4 text-gold" />
                   ) : (
                     <MessageCircle className="h-4 w-4 text-gold" />
                   )}
-                  {order.payment === "cod" ? "Cash on delivery (to confirm)" : "Confirm on WhatsApp"}
+                  {order.payment === "razorpay"
+                    ? order.paymentStatus === "paid"
+                      ? "Paid online · Razorpay"
+                      : "Online payment pending"
+                    : order.payment === "cod"
+                      ? "Cash on delivery (to confirm)"
+                      : "Confirm on WhatsApp"}
                 </p>
                 <p className="mt-1.5 text-[10px] leading-relaxed text-charcoal/45">
-                  {order.payment === "cod"
-                    ? "COD availability depends on your pincode. We will confirm before dispatch."
-                    : "Send us the order reference on WhatsApp and we will share payment details."}
+                  {order.payment === "razorpay"
+                    ? order.paymentStatus === "paid"
+                      ? `Payment ${order.razorpay?.paymentId ?? ""} — received in full.`
+                      : "Your order is reserved while the payment is pending."
+                    : order.payment === "cod"
+                      ? "COD availability depends on your pincode. We will confirm before dispatch."
+                      : "Send us the order reference on WhatsApp and we will share payment details."}
                 </p>
               </div>
+
+              {order.payment === "razorpay" &&
+                order.paymentStatus !== "paid" &&
+                order.razorpay && (
+                  <button
+                    type="button"
+                    disabled={paying}
+                    onClick={() =>
+                      openRazorpay({
+                        keyId: order.razorpay!.keyId ?? "",
+                        orderId: order.razorpay!.orderId,
+                        amount: order.razorpay!.amount,
+                        order,
+                      })
+                    }
+                    className="btn btn-primary w-full"
+                  >
+                    {paying ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <CreditCard className="h-4 w-4" />
+                    )}
+                    <span>Complete payment · {formatINR(order.total)}</span>
+                  </button>
+                )}
 
               <a
                 href={whatsappHref}
@@ -547,72 +773,178 @@ export function CheckoutClient() {
               How would you like to confirm?
             </h2>
             <p className="mt-2 text-[11px] leading-relaxed text-charcoal/50">
-              Online payment is not enabled. Choose how you would like the studio to reach you.
+              {payments.razorpayEnabled
+                ? "Pay online with UPI, cards and netbanking — or confirm your order personally."
+                : "Online payment is not enabled. Choose how you would like the studio to reach you."}
             </p>
           </div>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => setPayment("whatsapp")}
-              aria-pressed={payment === "whatsapp"}
-              className={cn(
-                "flex h-full flex-col rounded-xl border p-4 text-left transition-all duration-300",
-                payment === "whatsapp"
-                  ? "border-forest bg-forest/[0.04] ring-1 ring-forest/10"
-                  : "border-forest/15 hover:border-gold",
-              )}
-            >
-              <span className="flex items-center justify-between">
-                <MessageCircle className="h-5 w-5 text-gold" strokeWidth={1.5} />
-                <span
-                  className={cn(
-                    "grid h-4 w-4 place-items-center rounded-full border",
-                    payment === "whatsapp" ? "border-forest bg-forest text-ivory" : "border-forest/25",
-                  )}
-                >
-                  {payment === "whatsapp" && <Check className="h-2.5 w-2.5" />}
+          <div
+            className={cn(
+              "mt-5 grid gap-3",
+              payments.razorpayEnabled ? "sm:grid-cols-3" : "sm:grid-cols-2",
+            )}
+          >
+            {payments.razorpayEnabled && (
+              <button
+                type="button"
+                onClick={() => setPayment("razorpay")}
+                aria-pressed={payment === "razorpay"}
+                className={cn(
+                  "flex h-full flex-col rounded-xl border p-4 text-left transition-all duration-300",
+                  payment === "razorpay"
+                    ? "border-forest bg-forest/[0.04] ring-1 ring-forest/10"
+                    : "border-forest/15 hover:border-gold",
+                )}
+              >
+                <span className="flex items-center justify-between">
+                  <CreditCard className="h-5 w-5 text-gold" strokeWidth={1.5} />
+                  <span
+                    className={cn(
+                      "grid h-4 w-4 place-items-center rounded-full border",
+                      payment === "razorpay"
+                        ? "border-forest bg-forest text-ivory"
+                        : "border-forest/25",
+                    )}
+                  >
+                    {payment === "razorpay" && <Check className="h-2.5 w-2.5" />}
+                  </span>
                 </span>
-              </span>
-              <span className="mt-3 text-[10.5px] font-medium text-forest">Confirm on WhatsApp</span>
-              <span className="mt-1 text-[10px] leading-relaxed text-charcoal/45">
-                We create your request, then you send it to the studio with one tap. Payment is
-                arranged personally.
-              </span>
-              <span className="mt-3 text-[7.5px] uppercase tracking-[0.14em] text-gold">Recommended</span>
-            </button>
+                <span className="mt-3 text-[10.5px] font-medium text-forest">Pay online</span>
+                <span className="mt-1 text-[10px] leading-relaxed text-charcoal/45">
+                  UPI, credit and debit cards, netbanking and wallets — processed securely by
+                  Razorpay.
+                </span>
+                <span className="mt-3 text-[7.5px] uppercase tracking-[0.14em] text-gold">
+                  Instant confirmation
+                </span>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => setPayment("cod")}
-              aria-pressed={payment === "cod"}
-              className={cn(
-                "flex h-full flex-col rounded-xl border p-4 text-left transition-all duration-300",
-                payment === "cod"
-                  ? "border-forest bg-forest/[0.04] ring-1 ring-forest/10"
-                  : "border-forest/15 hover:border-gold",
-              )}
-            >
-              <span className="flex items-center justify-between">
-                <Banknote className="h-5 w-5 text-gold" strokeWidth={1.5} />
-                <span
-                  className={cn(
-                    "grid h-4 w-4 place-items-center rounded-full border",
-                    payment === "cod" ? "border-forest bg-forest text-ivory" : "border-forest/25",
-                  )}
-                >
-                  {payment === "cod" && <Check className="h-2.5 w-2.5" />}
+            {payments.whatsappEnabled && (
+              <button
+                type="button"
+                onClick={() => setPayment("whatsapp")}
+                aria-pressed={payment === "whatsapp"}
+                className={cn(
+                  "flex h-full flex-col rounded-xl border p-4 text-left transition-all duration-300",
+                  payment === "whatsapp"
+                    ? "border-forest bg-forest/[0.04] ring-1 ring-forest/10"
+                    : "border-forest/15 hover:border-gold",
+                )}
+              >
+                <span className="flex items-center justify-between">
+                  <MessageCircle className="h-5 w-5 text-gold" strokeWidth={1.5} />
+                  <span
+                    className={cn(
+                      "grid h-4 w-4 place-items-center rounded-full border",
+                      payment === "whatsapp"
+                        ? "border-forest bg-forest text-ivory"
+                        : "border-forest/25",
+                    )}
+                  >
+                    {payment === "whatsapp" && <Check className="h-2.5 w-2.5" />}
+                  </span>
                 </span>
-              </span>
-              <span className="mt-3 text-[10.5px] font-medium text-forest">Cash on delivery</span>
-              <span className="mt-1 text-[10px] leading-relaxed text-charcoal/45">
-                Request COD. Availability depends on your pincode and is confirmed before dispatch.
-              </span>
-              <span className="mt-3 text-[7.5px] uppercase tracking-[0.14em] text-charcoal/35">
-                Subject to confirmation
-              </span>
-            </button>
+                <span className="mt-3 text-[10.5px] font-medium text-forest">
+                  Confirm on WhatsApp
+                </span>
+                <span className="mt-1 text-[10px] leading-relaxed text-charcoal/45">
+                  We create your request, then you send it to the studio with one tap. Payment is
+                  arranged personally.
+                </span>
+                <span className="mt-3 text-[7.5px] uppercase tracking-[0.14em] text-gold">
+                  {payments.razorpayEnabled ? "Arranged personally" : "Recommended"}
+                </span>
+              </button>
+            )}
+
+            {payments.codEnabled && (
+              <button
+                type="button"
+                onClick={() => setPayment("cod")}
+                aria-pressed={payment === "cod"}
+                className={cn(
+                  "flex h-full flex-col rounded-xl border p-4 text-left transition-all duration-300",
+                  payment === "cod"
+                    ? "border-forest bg-forest/[0.04] ring-1 ring-forest/10"
+                    : "border-forest/15 hover:border-gold",
+                )}
+              >
+                <span className="flex items-center justify-between">
+                  <Banknote className="h-5 w-5 text-gold" strokeWidth={1.5} />
+                  <span
+                    className={cn(
+                      "grid h-4 w-4 place-items-center rounded-full border",
+                      payment === "cod"
+                        ? "border-forest bg-forest text-ivory"
+                        : "border-forest/25",
+                    )}
+                  >
+                    {payment === "cod" && <Check className="h-2.5 w-2.5" />}
+                  </span>
+                </span>
+                <span className="mt-3 text-[10.5px] font-medium text-forest">
+                  Cash on delivery
+                </span>
+                <span className="mt-1 text-[10px] leading-relaxed text-charcoal/45">
+                  Request COD. Availability depends on your pincode and is confirmed before
+                  dispatch.
+                </span>
+                <span className="mt-3 text-[7.5px] uppercase tracking-[0.14em] text-charcoal/35">
+                  Subject to confirmation
+                </span>
+              </button>
+            )}
           </div>
+
+          {!payments.razorpayEnabled && !payments.whatsappEnabled && !payments.codEnabled && (
+            <p
+              role="alert"
+              className="mt-4 rounded-lg border border-burgundy/25 bg-burgundy/5 px-4 py-3 text-[11px] leading-relaxed text-burgundy"
+            >
+              No ordering method is enabled right now — please contact the studio directly.
+            </p>
+          )}
+
+          {pendingPayment && !order && (
+            <div className="mt-5 rounded-xl border border-gold/40 bg-gold/[0.06] p-4">
+              <p className="text-[8px] uppercase tracking-[0.2em] text-gold">
+                Payment pending · order {pendingPayment.order.id}
+              </p>
+              <p className="mt-2 text-[11px] leading-relaxed text-charcoal/60">
+                Your order is reserved for {formatINR(pendingPayment.order.total)}. Complete the
+                payment to confirm it, or finish on WhatsApp.
+              </p>
+              {paymentNotice && (
+                <p
+                  role="alert"
+                  className="mt-2 rounded-lg border border-burgundy/25 bg-burgundy/5 px-3 py-2 text-[10px] leading-relaxed text-burgundy"
+                >
+                  {paymentNotice}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => openRazorpay(pendingPayment)}
+                  disabled={paying}
+                  className="btn btn-primary"
+                >
+                  {paying ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CreditCard className="h-4 w-4" />
+                  )}
+                  <span>Pay {formatINR(pendingPayment.order.total)}</span>
+                </button>
+                <button type="button" onClick={finishOnWhatsApp} className="btn">
+                  <MessageCircle className="h-4 w-4" />
+                  <span>Finish on WhatsApp</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           <label className="mt-5 flex cursor-pointer items-start gap-3 border-t border-forest/10 pt-4">
             <input
@@ -622,7 +954,9 @@ export function CheckoutClient() {
               className="mt-0.5 h-4 w-4 shrink-0 accent-forest"
             />
             <span className="text-[10px] leading-relaxed text-charcoal/50">
-              I understand this is an order request, not a completed purchase. I agree to the{" "}
+              {payments.razorpayEnabled
+                ? "I agree to the "
+                : "I understand this is an order request, not a completed purchase. I agree to the "}
               <Link href="/policies/terms" className="text-burgundy underline underline-offset-2">
                 terms
               </Link>{" "}
@@ -645,24 +979,35 @@ export function CheckoutClient() {
 
           <button
             type="submit"
-            disabled={status === "sending"}
-            className={cn("btn btn-primary mt-5 w-full", status === "sending" && "cursor-wait")}
+            disabled={status === "sending" || Boolean(pendingPayment) || paying}
+            className={cn(
+              "btn btn-primary mt-5 w-full",
+              (status === "sending" || paying) && "cursor-wait",
+            )}
           >
             {status === "sending" ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Placing request</span>
+                <span>{payment === "razorpay" ? "Creating your order" : "Placing request"}</span>
               </>
             ) : (
               <>
-                <span>Place order request</span>
+                <span>
+                  {pendingPayment
+                    ? "Payment pending — use the panel above"
+                    : payment === "razorpay"
+                      ? `Continue to payment · ${formatINR(total)}`
+                      : "Place order request"}
+                </span>
                 <ArrowRight className="h-4 w-4" />
               </>
             )}
           </button>
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[8.5px] uppercase tracking-[0.14em] text-charcoal/35">
             <ShieldCheck className="h-3.5 w-3.5 text-botanical" />
-            No payment is taken on this website
+            {payments.razorpayEnabled
+              ? "Payments secured by Razorpay · also orderable on WhatsApp"
+              : "No payment is taken on this website"}
           </p>
         </section>
       </div>

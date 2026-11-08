@@ -36,20 +36,43 @@ export async function POST(request: Request) {
         ? `tasty-treasures/${requestedFolder.replace(/^\/+|\/+$/g, "")}`
         : "tasty-treasures";
 
+    // The studio picks the destination: "cloudinary", "local", or "auto"
+    // (cloud when keys exist, otherwise the local disk).
+    const requestedProvider = data.get("provider");
+    const destination =
+      requestedProvider === "cloudinary" || requestedProvider === "local"
+        ? requestedProvider
+        : "auto";
+    const wantsCloud =
+      destination === "cloudinary" || (destination === "auto" && isCloudinaryConfigured());
+
     // Cloudinary in production — images survive Vercel's read-only filesystem.
-    if (isCloudinaryConfigured()) {
+    if (wantsCloud && isCloudinaryConfigured()) {
       try {
         const url = await uploadToCloudinary(file, folder);
         return NextResponse.json({ url, provider: "cloudinary" });
       } catch (error) {
-        return NextResponse.json(
-          { error: error instanceof Error ? error.message : "Cloudinary upload failed." },
-          { status: 502 },
-        );
+        // An explicit cloud choice surfaces the failure; "auto" falls through
+        // to the local disk so the upload never fails for a config hiccup.
+        if (destination === "cloudinary") {
+          return NextResponse.json(
+            { error: error instanceof Error ? error.message : "Cloudinary upload failed." },
+            { status: 502 },
+          );
+        }
       }
+    } else if (destination === "cloudinary") {
+      return NextResponse.json(
+        {
+          error:
+            "Cloudinary is not configured. Switch to a local upload, or add the CLOUDINARY_* keys.",
+        },
+        { status: 503 },
+      );
     }
 
-    // Local fallback when Cloudinary keys are not set (local development only).
+    // Local disk — always available in development. Note: files written here
+    // do not persist on Vercel's read-only filesystem, so prefer Cloud there.
     const extension = (file.name.split(".").pop() ?? "jpg")
       .toLowerCase()
       .replace(/[^a-z0-9]/g, "");

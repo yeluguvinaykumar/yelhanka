@@ -120,10 +120,12 @@ function ProductEditor({
   product,
   onClose,
   onSaved,
+  cloudinaryReady,
 }: {
   product?: Product;
   onClose: () => void;
   onSaved: (product: Product) => void;
+  cloudinaryReady: boolean;
 }) {
   const [draft, setDraft] = useState<Draft>(() => toDraft(product));
   const [saving, setSaving] = useState(false);
@@ -494,7 +496,7 @@ function ProductEditor({
             </Field>
             <Field
               label="Product image"
-              hint="Leave blank to use the branded pouch illustration. Cloudinary uploads are signed on the server."
+              hint="Leave blank to use the branded pouch illustration. Uploads go to Cloudinary or local storage — you pick per image."
               className="sm:col-span-2"
             >
               <MediaField
@@ -502,6 +504,7 @@ function ProductEditor({
                 onChange={(value) => update("image", value)}
                 folder="products"
                 label={`${draft.name || "Product"} image`}
+                cloudinaryReady={cloudinaryReady}
               />
             </Field>
           </div>
@@ -638,9 +641,11 @@ function ProductEditor({
 export function ProductsPanel({
   products,
   onChange,
+  cloudinaryReady,
 }: {
   products: Product[];
   onChange: (products: Product[]) => void;
+  cloudinaryReady: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"all" | CategoryId>("all");
@@ -888,6 +893,7 @@ export function ProductsPanel({
           product={editor.mode === "edit" ? editor.product : undefined}
           onClose={() => setEditor(null)}
           onSaved={saved}
+          cloudinaryReady={cloudinaryReady}
         />
       )}
     </div>

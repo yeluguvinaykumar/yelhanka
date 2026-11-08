@@ -90,6 +90,8 @@ The public tracking link is shown next to every AWB; customers can also use it d
 
 Copy `.env.example` to `.env.local` for development and add the same values in
 **Vercel → Project → Settings → Environment Variables** for production. Redeploy after changes.
+For machine-specific overrides (for example a non-SRV Atlas URI on a restricted network), use
+`.env.development.local`; Next.js loads it before `.env.local` in development.
 
 | Variable                   | Required | Purpose                                                        |
 | -------------------------- | -------- | -------------------------------------------------------------- |
@@ -99,6 +101,7 @@ Copy `.env.example` to `.env.local` for development and add the same values in
 | `NEXT_PUBLIC_SITE_URL`     | Yes      | Canonical origin for metadata, sitemap, robots and tracking.    |
 | `MONGODB_URI`              | Yes*     | MongoDB Atlas connection string.                                |
 | `MONGODB_DB`               | No       | Database name. Defaults to `tasty-treasures`.                   |
+| `MONGODB_DNS_SERVERS`      | No       | Comma-separated DNS resolvers for restricted networks.          |
 | `CLOUDINARY_CLOUD_NAME`    | Yes*     | Cloudinary cloud name.                                          |
 | `CLOUDINARY_API_KEY`       | Yes*     | Cloudinary API key.                                             |
 | `CLOUDINARY_API_SECRET`    | Yes*     | Cloudinary API secret (server-only).                            |
@@ -148,6 +151,10 @@ push/PR to `main`.
 2. Add a database user and allow network access (use `0.0.0.0/0` or Vercel's IP ranges).
 3. Copy the connection string into `MONGODB_URI`, including `retryWrites=true&w=majority`.
 4. Set `MONGODB_DB=tasty-treasures` (or your preferred name).
+
+If Atlas returns `tlsv1 alert internal error` (SSL alert 80), the connecting IP is not on the
+cluster's access list. Add the current public IP under **Network Access**, or use `0.0.0.0/0`
+only for a short test. Temporary Atlas entries expire, so use a permanent entry for Vercel.
 
 The app creates collections on first write: `products`, `orders`, `enquiries`, `subscribers` and
 `content`. Products seed from `lib/catalogue.ts` when the collection is empty.

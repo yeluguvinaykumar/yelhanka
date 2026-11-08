@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { ArrowUpRight, Plus } from "lucide-react";
 import type { Product } from "@/lib/types";
 import { ProductArt } from "@/components/commerce/ProductArt";
+import { Tilt } from "@/components/ui/Tilt";
 import { useCart } from "@/components/providers/CartProvider";
 import { categoryLabel } from "@/lib/catalogue";
 import { cn, formatINR } from "@/lib/utils";
@@ -44,9 +45,11 @@ export function ProductCard({
           className="block"
         >
           <div className="relative aspect-[4/4.7] overflow-hidden">
-            <div className="absolute inset-0 transition-transform duration-[900ms] ease-premium group-hover:scale-[1.045]">
-              <ProductArt product={product} />
-            </div>
+            <Tilt className="absolute inset-0" max={5}>
+              <div className="absolute inset-0 transition-transform duration-[900ms] ease-premium group-hover:scale-[1.045]">
+                <ProductArt product={product} />
+              </div>
+            </Tilt>
           </div>
         </Link>
 

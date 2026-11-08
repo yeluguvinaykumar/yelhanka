@@ -11,6 +11,7 @@ import type {
   Order,
   Product,
   SiteContent,
+  SiteSettings,
   Subscriber,
 } from "./types";
 
@@ -281,4 +282,62 @@ export async function getSubscribers(): Promise<Subscriber[]> {
 export async function saveSubscribers(subscribers: Subscriber[]): Promise<void> {
   if (await mongoReplace("subscribers", subscribers)) return;
   await writeJson("subscribers.json", subscribers);
+}
+
+/* -------------------------------- Settings ------------------------------ */
+
+export const defaultSettings: SiteSettings = {
+  payments: {
+    razorpayEnabled: false,
+    codEnabled: true,
+    whatsappEnabled: true,
+    razorpayKeyId: "",
+    razorpayKeySecret: "",
+    razorpayWebhookSecret: "",
+  },
+};
+
+/**
+ * Studio settings — payment methods and gateway keys, editable from
+ * Admin → Integrations. Stored as one document (`_id: "site"`), JSON file
+ * fallback for local development.
+ */
+export async function getSettings(): Promise<SiteSettings> {
+  if (isMongoConfigured()) {
+    const db = await getMongoDb();
+    if (db) {
+      const doc = await db
+        .collection<StringIdDocument>("settings")
+        .findOne({ _id: "site" }, { projection: { _id: 0 } });
+      if (doc) {
+        const stored = doc as unknown as Partial<SiteSettings>;
+        return {
+          ...defaultSettings,
+          ...stored,
+          payments: { ...defaultSettings.payments, ...(stored.payments ?? {}) },
+        };
+      }
+    }
+  }
+  const stored = await readJson<Partial<SiteSettings>>("settings.json", {});
+  return {
+    ...defaultSettings,
+    ...stored,
+    payments: { ...defaultSettings.payments, ...(stored.payments ?? {}) },
+  };
+}
+
+export async function saveSettings(settings: SiteSettings): Promise<void> {
+  if (isMongoConfigured()) {
+    const db = await getMongoDb();
+    if (db) {
+      await db.collection<StringIdDocument>("settings").replaceOne(
+        { _id: "site" },
+        { ...(settings as unknown as Document), _id: "site" } as StringIdDocument,
+        { upsert: true },
+      );
+      return;
+    }
+  }
+  await writeJson("settings.json", settings);
 }

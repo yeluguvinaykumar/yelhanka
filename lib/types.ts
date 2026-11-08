@@ -145,7 +145,18 @@ export type Order = {
   subtotal: number;
   shipping: number;
   total: number;
-  payment: "cod" | "whatsapp";
+  payment: "cod" | "whatsapp" | "razorpay";
+  /** Only set for online payments — pending until the signature verifies. */
+  paymentStatus?: "pending" | "paid" | "failed";
+  razorpay?: {
+    orderId: string;
+    keyId?: string;
+    paymentId?: string;
+    signature?: string;
+    amount: number;
+    createdAt: string;
+    paidAt?: string;
+  };
   status: OrderStatus;
   shipment?: Shipment;
 };
@@ -210,9 +221,28 @@ export type AdminSession = {
   exp: number;
 };
 
+/**
+ * Everything about how the shop takes money — editable from
+ * Admin → Integrations → Payment settings. Secrets stored here override the
+ * RAZORPAY_* environment variables.
+ */
+export type PaymentSettings = {
+  razorpayEnabled: boolean;
+  codEnabled: boolean;
+  whatsappEnabled: boolean;
+  razorpayKeyId: string;
+  razorpayKeySecret: string;
+  razorpayWebhookSecret: string;
+};
+
+export type SiteSettings = {
+  payments: PaymentSettings;
+};
+
 export type IntegrationStatus = {
   storage: "mongodb" | "local";
   mongodb: boolean;
+  mongodbReachable: boolean;
   cloudinary: boolean;
   delhivery: boolean;
   delhiveryPickup: boolean;

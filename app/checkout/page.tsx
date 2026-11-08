@@ -1,17 +1,27 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CheckoutClient } from "@/components/checkout/CheckoutClient";
+import { CheckoutClient, type PaymentOptions } from "@/components/checkout/CheckoutClient";
+import { isRazorpayConfigured } from "@/lib/razorpay";
+import { getSettings } from "@/lib/store";
 
 export const metadata: Metadata = {
   title: "Checkout",
   description:
-    "Share your delivery details and place an order request. Tasty Treasures confirms every order personally — no online payment is taken.",
+    "Share your delivery details and place your order — pay securely online with Razorpay, or confirm on WhatsApp or cash on delivery.",
   robots: { index: false, follow: false },
 };
 
 const steps = ["Basket", "Details", "Confirmation"];
 
-export default function CheckoutPage() {
+export default async function CheckoutPage() {
+  const settings = await getSettings();
+  const payments: PaymentOptions = {
+    // Online checkout only appears when both the studio switch is on and the
+    // gateway keys actually resolve (settings or environment).
+    razorpayEnabled: settings.payments.razorpayEnabled && (await isRazorpayConfigured()),
+    codEnabled: settings.payments.codEnabled,
+    whatsappEnabled: settings.payments.whatsappEnabled,
+  };
   return (
     <>
       <section className="paper border-b border-forest/10">
@@ -57,7 +67,7 @@ export default function CheckoutPage() {
 
       <section className="bg-ivory section-pad-sm">
         <div className="editorial-container">
-          <CheckoutClient />
+          <CheckoutClient payments={payments} />
         </div>
       </section>
     </>

@@ -2,19 +2,21 @@ import "server-only";
 
 import { isCloudinaryConfigured } from "./cloudinary";
 import { isDelhiveryConfigured, pickupIsConfigured } from "./delhivery";
-import { isMongoConfigured } from "./mongodb";
+import { getMongoDb, isMongoConfigured } from "./mongodb";
 import type { IntegrationStatus } from "./types";
 
 /**
  * Read-only snapshot of the integration environment used by the admin
  * "Integrations" panel. Never returns secret values — only whether they are
- * present and which mode is active.
+ * present, whether MongoDB is actually reachable, and which mode is active.
  */
-export function getIntegrationStatus(): IntegrationStatus {
+export async function getIntegrationStatus(): Promise<IntegrationStatus> {
   const mongodb = isMongoConfigured();
+  const mongodbReachable = mongodb ? Boolean(await getMongoDb()) : false;
   return {
-    storage: mongodb ? "mongodb" : "local",
+    storage: mongodbReachable ? "mongodb" : "local",
     mongodb,
+    mongodbReachable,
     cloudinary: isCloudinaryConfigured(),
     delhivery: isDelhiveryConfigured(),
     delhiveryPickup: pickupIsConfigured(),
